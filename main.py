@@ -16,7 +16,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS : autorise votre site (Netlify, GitHub Pages, etc.) à appeler cette API
+# CORS : autorise votre site à appeler cette API
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,10 +25,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ============================================================
-# CONFIGURATION APIFY
+# FONCTION : Récupérer le token Apify proprement
 # ============================================================
-APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
+def get_apify_token():
+    """Lit APIFY_TOKEN à chaque appel (au lieu du démarrage)."""
+    token = os.getenv("APIFY_TOKEN", "")
+    # Nettoyage : espaces, guillemets
+    token = token.strip().replace('"', '').replace("'", "").replace("\n", "")
+    return token
+
 
 APIFY_ACTORS = {
     "jobberman": {
@@ -73,8 +80,12 @@ class JobResult(BaseModel):
 # ============================================================
 async def run_apify_actor(actor_id: str, input_data: dict) -> list:
     """Lance un acteur Apify et attend les résultats."""
+    token = get_apify_token()
+    if not token:
+        return []
+
     url = f"https://api.apify.com/v2/acts/{actor_id}/run-sync-get-dataset-items"
-    params = {"token": APIFY_TOKEN, "timeout": 120}
+    params = {"token": token, "timeout": 120}
 
     async with httpx.AsyncClient(timeout=180.0) as client:
         try:
@@ -108,21 +119,25 @@ def normalize_job(raw: dict, source: str, country_code: str) -> JobResult:
 
 
 # ============================================================
-# ENDPOINTS  (avec GET et HEAD pour le health check Render)
+# ENDPOINTS
 # ============================================================
 @app.api_route("/", methods=["GET", "HEAD"])
 def root():
+    token = get_apify_token()
     return {
         "status": "online",
         "service": "Portail Emplois Monde - Backend",
-        "apify_configured": bool(APIFY_TOKEN),
+        "apify_configured": bool(token),
+        "token_length": len(token),
+        "token_start": token[:15] if token else "VIDE",
         "timestamp": datetime.now().isoformat()
     }
 
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health():
-    return {"status": "healthy", "apify_token_present": bool(APIFY_TOKEN)}
+    token = get_apify_token()
+    return {"status": "healthy", "apify_token_present": bool(token)}
 
 
 @app.api_route("/test", methods=["GET", "HEAD"])
@@ -143,11 +158,9 @@ def list_actors():
 
 @app.post("/api/search", response_model=List[JobResult])
 async def search_jobs(request: JobSearchRequest):
-    """
-    Recherche d'offres d'emploi via les scrapers Apify.
-    Filtre STRICTEMENT par pays.
-    """
-    if not APIFY_TOKEN:
+    """Recherche d'offres d'emploi via les scrapers Apify."""
+    token = get_apify_token()
+    if not token:
         raise HTTPException(status_code=500, detail="APIFY_TOKEN non configuré")
 
     if not request.query or len(request.query.strip()) < 2:
