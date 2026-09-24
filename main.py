@@ -2,7 +2,7 @@
 Portail Emplois Monde - Backend API
 FastAPI + Apify pour scraper les sites d'emploi africains en temps réel.
 """
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -19,7 +19,7 @@ app = FastAPI(
 # CORS : autorise votre site (Netlify, GitHub Pages, etc.) à appeler cette API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # À restreindre plus tard à votre domaine
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -30,7 +30,6 @@ app.add_middleware(
 # ============================================================
 APIFY_TOKEN = os.getenv("APIFY_TOKEN", "")
 
-# Acteurs Apify à utiliser (ID des acteurs dans le store)
 APIFY_ACTORS = {
     "jobberman": {
         "id": "blackfalcondata/jobberman-scraper",
@@ -109,9 +108,9 @@ def normalize_job(raw: dict, source: str, country_code: str) -> JobResult:
 
 
 # ============================================================
-# ENDPOINTS
+# ENDPOINTS  (avec GET et HEAD pour le health check Render)
 # ============================================================
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {
         "status": "online",
@@ -121,9 +120,14 @@ def root():
     }
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {"status": "healthy", "apify_token_present": bool(APIFY_TOKEN)}
+
+
+@app.api_route("/test", methods=["GET", "HEAD"])
+def test():
+    return {"message": "Le backend fonctionne !"}
 
 
 @app.get("/api/actors")
@@ -155,28 +159,22 @@ async def search_jobs(request: JobSearchRequest):
     all_results = []
 
     for actor_key, actor_config in APIFY_ACTORS.items():
-        # Vérifier si l'acteur couvre au moins un des pays demandés
         matching_countries = [c for c in request.countries if c in actor_config["countries"]]
         if not matching_countries:
             continue
 
-        # Préparer les paramètres selon l'acteur
         input_data = build_actor_input(actor_key, actor_config, request, matching_countries)
 
-        # Lancer l'acteur
         print(f"Lancement de {actor_config['name']} pour {matching_countries}")
         raw_results = await run_apify_actor(actor_config["id"], input_data)
 
-        # Normaliser + filtrer strictement par pays
         for raw in raw_results:
             job_country = (raw.get("location_country") or "").lower()
-            # Filtre strict : ne garder que si le pays correspond
             if job_country and job_country not in request.countries:
                 continue
             normalized = normalize_job(raw, actor_config["name"], job_country or matching_countries[0])
             all_results.append(normalized)
 
-    # Déduplication
     seen = set()
     unique = []
     for job in all_results:
